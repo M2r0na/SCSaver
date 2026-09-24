@@ -232,11 +232,8 @@ Switch(...)
 Deaths(...)
 MSQC로 생성된 공유 명령
 ```
-
-로컬 키 입력을 직접 사용하지 마세요.
-
+키인식 저장 예시:
 ```javascript
-// 멀티플레이에서는 직접 사용하지 않는 것을 권장합니다.
 if (@KeyDown(P1, "INSERT")) {
     Sync.Save(P1, 0);
 }
