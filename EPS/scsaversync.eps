@@ -1,0 +1,132 @@
+import msqcloader as ml;
+
+const SCSaver = py_eval('__import__("SCSaver")');
+const LocalPacketEPD = py_eval('__import__("SCSaver").local_packet_epd()');
+const SharedPacket = EUDArray(4098);
+const SharedPacketEPD = EPD(SharedPacket);
+
+// Shared state. These values must change identically on every client.
+var SyncState = 0;
+var ActiveOperation = 0;
+var ActivePlayer = 0;
+var ActiveSlot = 0;
+var SyncTimeout = 0;
+const MSQC_LOOP_INTERVAL = 4;
+var MSQCLoopTimer = 0;
+
+// Local-only request latch. This variable is read/written only while CP is the
+// requesting player and IsUserCP() is true. It prevents sending the same
+// launcher SAVE/LOAD request again every trigger cycle.
+var LocalRequestStarted = 0;
+
+function Init() {
+    ml.Init();
+}
+
+function Exec() {
+    // Handles local launcher heartbeat and ACK. It never applies gameplay data.
+    SCSaver.tick_local();
+
+    if (SyncState == 1) {
+        const PreviousCP = getcurpl();
+        setcurpl(ActivePlayer);
+
+        // Runs only on the requesting player's own computer.
+        if (IsUserCP()) {
+            // Start the launcher command exactly once for this shared request.
+            if (LocalRequestStarted == 0) {
+                if (ActiveOperation == 1) {
+                    SCSaver.begin_local_save(ActivePlayer,ActiveSlot);
+                } else if (ActiveOperation == 2) {
+                    SCSaver.begin_local_load(ActivePlayer,ActiveSlot);
+                }
+                LocalRequestStarted = 1;
+            }
+            SCSaver.show_local_progress(ActivePlayer);
+            // Returns a nonzero packet length once after launcher completion.
+            const PacketLength = SCSaver.take_local_packet();
+            if (PacketLength >= 2) {
+                ml.StartLocal(PacketLength);
+            }
+        }
+
+        // Low-APM transfer. Local launcher polling still runs every cycle.
+        MSQCLoopTimer += 1;
+        if (MSQCLoopTimer >= MSQC_LOOP_INTERVAL) {
+            MSQCLoopTimer = 0;
+            ml.Loop(ActivePlayer);
+            SyncTimeout += 1;
+        }
+        setcurpl(PreviousCP);
+
+        // Completion is shared because loadstart[ActivePlayer] is an MSQC
+        // receiver-side state updated identically after verification.
+        if (ml.loadstart[ActivePlayer] == 0) {
+            SCSaver.complete_shared_packet(
+                SharedPacketEPD,
+                ActiveOperation,
+                ActivePlayer
+            );
+            SyncState = 0;
+            ActiveOperation = 0;
+            SyncTimeout = 0;
+            MSQCLoopTimer = 0;
+        }
+
+        if (SyncTimeout >= 2880) {
+            SCSaver.abort_shared(4, ActivePlayer);
+            SyncState = 0;
+            ActiveOperation = 0;
+            SyncTimeout = 0;
+            MSQCLoopTimer = 0;
+        }
+    }
+}
+
+function StartRequest(player, slot, operation) {
+    if (SyncState != 0 || SCSaver.shared_busy()) {
+        return 0;
+    }
+
+    ActivePlayer = player;
+    ActiveSlot = slot;
+    ActiveOperation = operation;
+    SyncState = 1;
+    SyncTimeout = 0;
+    MSQCLoopTimer = 0;
+    SCSaver.set_shared_busy(1);
+
+    const PreviousCP = getcurpl();
+    setcurpl(ActivePlayer);
+
+    // Reset only the selected player's local request latch.
+    if (IsUserCP()) {
+        LocalRequestStarted = 0;
+    }
+
+    // Shared receiver initialization plus requester-local sender initialization.
+    ml.Start(ActivePlayer, LocalPacketEPD, SharedPacketEPD);
+    setcurpl(PreviousCP);
+
+    // Python plugin prints and plays the request notification for ActivePlayer.
+    SCSaver.play_request_sound(
+        ActivePlayer,
+        ActiveOperation
+    );
+
+    return 1;
+}
+
+function Save(player, slot) {
+    return StartRequest(player, slot, 1);
+}
+
+function Load(player, slot) {
+    return StartRequest(player, slot, 2);
+}
+
+function IsBusy() { return SCSaver.shared_busy(); }
+function SaveCompleted() { return SCSaver.save_completed(); }
+function LoadCompleted() { return SCSaver.load_completed(); }
+function Failed() { return SCSaver.failed(); }
+function ErrorCode() { return SCSaver.error_code(); }

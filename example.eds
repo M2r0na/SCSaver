@@ -1,0 +1,11 @@
+[main]
+input: path\\to\\base.scx
+output: path\\to\\output.scx
+
+[scsaver]
+
+[TriggerEditor\\main.eps]
+
+[MSQC]
+MSQCIsTransfer.Exactly(1) ; xy , MSQCSend1 : MSQCReceive1
+; Add MSQCSend2 through MSQCSend20 using the README configuration.
